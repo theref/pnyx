@@ -1,0 +1,98 @@
+import React, { useState } from 'react';
+import { registerComponent } from '../../../lib/vulcan-lib/components';
+import MoreVertIcon from '@/lib/vendor/@material-ui/icons/src/MoreVert';
+import { Menu } from '@/components/widgets/Menu';
+import { useCurrentUserId } from '../../common/withUser';
+import { useTracking } from "../../../lib/analyticsEvents";
+import CommentActions from "./CommentActions";
+import { FeedCommentMetaInfo } from '../../ultraFeed/ultraFeedTypes';
+
+const styles = (theme: ThemeType) => ({
+  root: {
+    ...(theme.isFriendlyUI && {
+      "& .MuiList-padding": {
+        padding: 0,
+      },
+    }),
+  },
+  icon: {
+    cursor: "pointer",
+    fontSize:"1.4rem"
+  },
+})
+
+interface CommentsMenuComponentProps {
+  comment: CommentsList;
+  post?: PostsMinimumInfo;
+  tag?: TagBasicInfo | null;
+  showEdit: () => void;
+  onSeeLess?: () => void;
+  isSeeLessMode?: boolean;
+  commentMetaInfo?: FeedCommentMetaInfo;
+}
+
+const CommentsMenu = ({classes, className, comment, post, tag, showEdit, onSeeLess, isSeeLessMode, icon, ActionsComponent, commentMetaInfo}: {
+  classes: ClassesType<typeof styles>,
+  className?: string,
+  comment: CommentsList,
+  post?: PostsMinimumInfo,
+  tag?: TagBasicInfo,
+  showEdit: () => void,
+  onSeeLess?: () => void,
+  isSeeLessMode?: boolean,
+  icon?: any,
+  ActionsComponent?: React.ComponentType<CommentsMenuComponentProps>,
+  commentMetaInfo?: FeedCommentMetaInfo,
+}) => {
+  const [anchorEl, setAnchorEl] = useState<any>(null);
+
+  // Render menu-contents if the menu has ever been opened (keep rendering
+  // contents when closed after open, because of closing animation).
+  const [everOpened, setEverOpened] = useState(false);
+
+  const isLoggedIn = !!useCurrentUserId();
+  const { captureEvent } = useTracking({eventType: "commentMenuClicked", eventProps: {commentId: comment._id, itemType: "comment"}})
+
+  if (!isLoggedIn) return null
+
+  const MenuComponent = ActionsComponent ?? CommentActions;
+
+  return (
+    <>
+      <span
+        className={className}
+        onClick={event => {
+          captureEvent("commentMenuClicked", {open: true})
+          setAnchorEl(event.currentTarget)
+          setEverOpened(true);
+        }}
+      >
+        {icon ? icon : <MoreVertIcon className={classes.icon}/>}
+      </span>
+      <Menu
+        onClick={() => {
+          captureEvent("commentMenuClicked", {open: false})
+          setAnchorEl(null)
+        }}
+        open={Boolean(anchorEl)}
+        anchorEl={anchorEl}
+        className={classes.root}
+      >
+        {everOpened && <MenuComponent
+          comment={comment}
+          post={post}
+          tag={tag}
+          showEdit={showEdit}
+          onSeeLess={onSeeLess}
+          isSeeLessMode={isSeeLessMode}
+          commentMetaInfo={commentMetaInfo}
+        />}
+      </Menu>
+    </>
+  )
+}
+
+export default registerComponent('CommentsMenu', CommentsMenu, {styles});
+
+
+

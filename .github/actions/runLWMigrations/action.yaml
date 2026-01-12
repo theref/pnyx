@@ -1,0 +1,17 @@
+name: 'Run migrations'
+description: 'Run Postgres migrations'
+inputs:
+  mode:
+    description: 'Migrations mode: one of dev or prod'
+    required: true
+runs:
+  using: composite
+  steps:
+    - name: Setup Environment
+      uses: ./.github/actions/setupEnvironment
+
+    - name: Run migrations
+      shell: bash
+      env:
+        FORUM_MAGNUM_MIGRATE_CI: 1
+      run: yarn migrate up ${{ inputs.mode }} lw

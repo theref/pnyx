@@ -1,0 +1,91 @@
+import React, { useState } from 'react';
+import { registerComponent } from '../../lib/vulcan-lib/components';
+import { useDismissRecommendation } from './withDismissRecommendation';
+import { AnalyticsContext, useTracking } from '../../lib/analyticsEvents';
+import sortBy from 'lodash/sortBy';
+import sampleSize from 'lodash/sampleSize';
+import PostsItem from "../posts/PostsItem";
+import PostsLoading from "../posts/PostsLoading";
+import SectionFooter from "../common/SectionFooter";
+
+const ContinueReadingList = ({ continueReading, continueReadingLoading, limit=3, shuffle }: {
+  continueReading: ContinueReadingQueryQuery_ContinueReading_RecommendResumeSequence[],
+  continueReadingLoading?: boolean,
+  limit?: number,
+  // randomly select posts from your reading list if your reading list is longer than the limit
+  shuffle?: boolean,
+}) => {
+  const dismissRecommendation = useDismissRecommendation();
+  const [dismissedRecommendations, setDismissedRecommendations] = useState<any>({});
+  const [showAll, setShowAll] = useState(false);
+  const { captureEvent } = useTracking();
+  
+  const dismissAndHideRecommendation = (postId: string) => {
+    void dismissRecommendation(postId);
+    setDismissedRecommendations({
+      ...dismissedRecommendations,
+      [postId]: true
+    });
+    captureEvent("continueReadingDismissed", {"postId": postId});
+  }
+  
+  const limitResumeReading = (resumeReadingList: ContinueReadingQueryQuery_ContinueReading_RecommendResumeSequence[]): { entries: ContinueReadingQueryQuery_ContinueReading_RecommendResumeSequence[], showAllLink: boolean } => {
+    // Filter out dismissed recommendations
+    const filtered = resumeReadingList.filter(r=>!dismissedRecommendations[r.nextPost._id]);
+    
+    // Sort by last-interaction time
+    let sorted = sortBy(filtered, r=>r.lastReadTime);
+    sorted.reverse(); //in-place
+    
+    // Limit to the three most recent
+    if (showAll || sorted.length <= limit) {
+      return {
+        entries: sorted,
+        showAllLink: false,
+      };
+    } else if (shuffle) {
+      const sampled = sampleSize<ContinueReadingQueryQuery_ContinueReading_RecommendResumeSequence>(sorted, limit);
+      sorted = sortBy(sampled, r =>r.lastReadTime); // need to sort again because _.sample doesn't guarantee order
+      sorted.reverse();
+      return {
+        entries: sorted,
+        showAllLink: true,
+      }
+    } else {
+      return {
+        entries: sorted.slice(0, limit),
+        showAllLink: true,
+      }
+    }
+  }
+  if (continueReadingLoading || !continueReading)
+    return <PostsLoading/>
+
+  const { entries, showAllLink } = limitResumeReading(continueReading);
+
+  return <div>
+    <AnalyticsContext pageSubSectionContext="continueReadingList" capturePostItemOnMount>
+      {entries.map(resumeReading => {
+        const { nextPost, sequence, collection } = resumeReading;
+        return <PostsItem
+          post={nextPost}
+          sequenceId={sequence?._id}
+          resumeReading={resumeReading}
+          dismissRecommendation={() => dismissAndHideRecommendation(nextPost._id)}
+          key={sequence?._id || collection?._id}
+        />
+      })}
+      {showAllLink && <SectionFooter>
+        <a onClick={() => setShowAll(true)}>
+          Show All
+        </a>
+      </SectionFooter>}
+    </AnalyticsContext>
+  </div>
+}
+
+export default registerComponent('ContinueReadingList', ContinueReadingList);
+
+
+
+

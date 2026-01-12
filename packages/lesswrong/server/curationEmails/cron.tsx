@@ -1,0 +1,124 @@
+import React from "react";
+import { usesCurationEmailsCron } from "../../lib/betas";
+import CurationEmails from "../../server/collections/curationEmails/collection";
+import { Posts } from "../../server/collections/posts/collection";
+import Users from "../../server/collections/users/collection";
+import { isEAForum, testServerSetting } from "../../lib/instanceSettings";
+import { randomId } from "../../lib/random";
+import { wrapAndSendEmail } from "../emails/renderEmail";
+import CurationEmailsRepo from "../repos/CurationEmailsRepo";
+import UsersRepo from "../repos/UsersRepo";
+
+import chunk from "lodash/chunk";
+import moment from "moment";
+import { PostsEmail } from "../emailComponents/PostsEmail";
+import { executePromiseQueue } from "@/lib/utils/asyncUtils";
+import { backgroundTask } from "../utils/backgroundTask";
+
+export async function findUsersToEmail(filter: MongoSelector<DbUser>) {
+  let usersMatchingFilter = await Users.find(filter).fetch();
+  if (isEAForum()) {
+    return usersMatchingFilter
+  }
+
+  let usersToEmail = usersMatchingFilter.filter(u => {
+    if (u.email && u.emails && u.emails.length) {
+      let primaryAddress = u.email;
+
+      for(let i=0; i<u.emails.length; i++)
+      {
+        if(u.emails[i] && u.emails[i].address === primaryAddress && u.emails[i].verified)
+          return true;
+      }
+      return false;
+    } else {
+      return false;
+    }
+  });
+  return usersToEmail
+}
+
+export async function sendCurationEmail({users, postId, reason, subject}: {
+  users: Array<DbUser>,
+  postId: string,
+  reason: string,
+  
+  // Subject line to use in the email. If omitted, uses the post title.
+  subject?: string,
+}) {
+  // We *could* optimize to avoid refetching the post for every single user we email...
+  // ...but it might actually be better to not, since this allows us to e.g. edit the post after the job has started if there's some egregious issue
+  const post = await Posts.findOne(postId);
+  if (!post) {
+    throw new Error(`Can't find post to send by email: ${postId}`);
+  }
+  if (!post.curatedDate) {
+    // If we somehow end up in a situation where we're trying to send out a curation email
+    // for a post that's not currently curated (i.e. because it was un-curated), delete
+    // all remaining queued up emails for that post and bail
+    backgroundTask(CurationEmails.rawRemove({ postId: post._id }));
+    throw new Error(`Post ${post.title} (_id: ${post._id}) is not curated!`);
+  }
+
+  // Send emails to all users in parallel
+  await executePromiseQueue(users.map((user) => async () => {
+    await wrapAndSendEmail({
+      user,
+      subject: subject ?? post.title,
+      body: (emailContext) => <PostsEmail postIds={[post._id]} reason={reason} emailContext={emailContext}/>
+    });
+  }), 10);
+}
+
+export async function hydrateCurationEmailsQueue(postId: string) {
+  const usersRepo = new UsersRepo();
+
+  const userIdsToEmail = await usersRepo.getCurationSubscribedUserIds();
+  const now = new Date();
+
+  for (const batch of chunk(userIdsToEmail, 1000)) {
+    await CurationEmails.rawInsertMany(
+      batch.map(userId => ({
+        _id: randomId(),
+        userId,
+        postId,
+        createdAt: now,
+        schemaVersion: 1,
+        legacyData: null,
+      }))
+    );
+  }
+}
+
+function isWithinSanityCheckPeriod(post: DbPost) {
+  const twentyMinutesAgo = moment().subtract(20, 'minutes');
+  return moment(post.curatedDate).isAfter(twentyMinutesAgo);
+}
+
+export async function sendCurationEmails() {
+  const lastCuratedPost = await Posts.findOne({ curatedDate: { $exists: true } }, { sort: { curatedDate: -1 } });
+
+  // We specifically don't want to include the curatedDate filter in the SQL query because we want to skip doing anything if a post was newly curated in the last 20 minutes
+  if (!lastCuratedPost || isWithinSanityCheckPeriod(lastCuratedPost)) {
+    return;
+  }
+
+  const curationEmailsRepo = new CurationEmailsRepo();
+
+  // Picking up one user at a time from the queue means that even if multiple servers run separate instances of the cron job, we still don't double-send to any users
+  let emailToSend = await curationEmailsRepo.removeFromQueue();
+
+  while (emailToSend) {
+    const user = await Users.findOne(emailToSend.userId);
+
+    if (user) {
+      await sendCurationEmail({
+        users: [user],
+        postId: emailToSend.postId,
+        reason: "you have the \"Email me new posts in Curated\" option enabled"
+      });
+    }
+
+    emailToSend = await curationEmailsRepo.removeFromQueue();
+  }
+}

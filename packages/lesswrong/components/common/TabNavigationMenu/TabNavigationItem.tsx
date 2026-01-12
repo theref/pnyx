@@ -1,0 +1,310 @@
+import { registerComponent } from '../../../lib/vulcan-lib/components';
+import React, { useCallback } from 'react';
+import classNames from 'classnames';
+import { useLocation } from '../../../lib/routeUtil';
+import { MenuTabRegular } from './menuTabs';
+import { forumSelect } from '../../../lib/forumTypeUtils';
+import { useCurrentUser } from '../withUser';
+import { useCookiesWithConsent } from '@/components/hooks/useCookiesWithConsent';
+import { NAV_MENU_FLAG_COOKIE_PREFIX } from '@/lib/cookies/cookies';
+import TabNavigationSubItem from "./TabNavigationSubItem";
+import LWTooltip from "../LWTooltip";
+import { MenuItemLink } from "../Menus";
+import { defineStyles, useStyles } from '@/components/hooks/useStyles';
+
+export const iconWidth = 30
+
+const getIconTransform = () => forumSelect({
+  LessWrong: "scale(0.8)",
+  EAForum: "scale(0.7)",
+  default: undefined,
+});
+
+const styles = defineStyles('TabNavigationItem', (theme: ThemeType) => ({
+  selected: {
+    '& $icon': {
+      opacity: 1,
+    },
+    '& $navText': {
+      color: theme.palette.grey[theme.isFriendlyUI ? 1000 : 900],
+      fontWeight: 600,
+    },
+  },
+  menuItem: {
+    width: theme.isFriendlyUI ? 210 : 190,
+  },
+  desktopOnly: {
+    [theme.breakpoints.down("xs")]: {
+      display: "none !important",
+    },
+  },
+  navButton: {
+    '&:hover': {
+      opacity: theme.isFriendlyUI ? 1 : 0.6,
+      color: theme.isFriendlyUI ? theme.palette.grey[800] : undefined,
+      backgroundColor: 'transparent', // Prevent MUI default behavior of rendering solid background on hover
+      
+      ...(theme.isFriendlyUI && {
+        paddingTop: 10,
+        paddingBottom: 10,
+      }),
+    },
+    color: theme.palette.grey[theme.isFriendlyUI ? 600 : 800],
+    ...(theme.forumType === "LessWrong"
+      ? {
+        paddingTop: 7,
+        paddingBottom: 8,
+        paddingLeft: 16,
+        paddingRight: 16,
+      } : {
+        padding: "10px 16px",
+      }
+    ),
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "flex-start",
+    flexDirection: "row",
+  },
+  subItemOverride: {
+    paddingTop: 0,
+    paddingBottom: 0,
+    paddingLeft: 0,
+    paddingRight: 0,
+    '&:hover': {
+      backgroundColor: 'transparent', // Prevent MUI default behavior of rendering solid background on hover
+      opacity: theme.isFriendlyUI ? 1 : undefined,
+    }
+  },
+  icon: {
+    opacity: .3,
+    width: iconWidth,
+    height: 28,
+    marginRight: 16,
+    display: "inline",
+    "& svg": {
+      fill: theme.isFriendlyUI ? undefined : "currentColor",
+      color: theme.isFriendlyUI ? undefined : theme.palette.icon.navigationSidebarIcon,
+      transform: getIconTransform(),
+    },
+    ...(theme.isFriendlyUI && {
+      opacity: 1,
+    }),
+  },
+  iconOnlyIcon: {
+    marginRight: 0,
+    marginLeft: 17,
+    width: "100%",
+    display: "flex",
+    justifyContent: "center",
+  },
+  iconOnlyMode: {
+    width: "100%",
+    minWidth: 0,
+    height: "auto",
+    whiteSpace: "normal",
+    overflow: "visible",
+    textOverflow: "unset",
+    justifyContent: "center",
+    paddingLeft: 0,
+    paddingRight: 0,
+    flexDirection: "column",
+    gap: 3,
+    textAlign: "center",
+    '&:hover': {
+      backgroundColor: 'transparent',
+    }
+  },
+  selectedIcon: {
+    "& svg": {
+      color: theme.isFriendlyUI ? theme.palette.grey[1000] : undefined,
+    },
+  },
+  navText: {
+    ...theme.typography.body2,
+    color: "inherit",
+    ...(theme.isBookUI && theme.dark && {
+      color: theme.palette.text.bannerAdOverlay,
+    }),
+    textTransform: "none !important",
+  },
+  iconOnlyNavText: {
+    fontSize: 10,
+    color: theme.palette.grey[600],
+    marginBottom: 8,
+    marginLeft: 17,
+    textAlign: "center",
+  },
+  homeIcon: {
+    '& svg': {
+      height: 29,
+      position: "relative",
+      top: -1,
+    }
+  },
+  tooltip: {
+    maxWidth: theme.isFriendlyUI ? 190 : undefined,
+  },
+  flag: {
+    padding: "2px 4px",
+    marginLeft: 10,
+    fontSize: 11,
+    fontWeight: 600,
+    lineHeight: "110%",
+    letterSpacing: "0.33px",
+    textTransform: "uppercase",
+    background: theme.palette.primary.main,
+    borderRadius: theme.borderRadius.small,
+    color: theme.palette.text.alwaysWhite,
+  },
+}));
+
+export type TabNavigationItemProps = {
+  tab: MenuTabRegular,
+  onClick?: (event: React.MouseEvent<HTMLAnchorElement>) => void,
+  className?: string,
+  iconOnlyNavigationEnabled?: boolean,
+}
+
+const parseCookie = (
+  cookie: unknown,
+  setCookie: (value: string) => void,
+): {clickedAt?: Date, firstViewedAt: Date} => {
+  try {
+    if (!cookie || typeof cookie !== "object") {
+      throw new Error();
+    }
+    const {clickedAt, firstViewedAt} = cookie as AnyBecauseIsInput;
+    if (clickedAt && typeof clickedAt !== "string") {
+      throw new Error();
+    }
+    if (typeof firstViewedAt !== "string") {
+      throw new Error();
+    }
+    return {
+      clickedAt: clickedAt ? new Date(clickedAt) : undefined,
+      firstViewedAt: new Date(firstViewedAt),
+    };
+  } catch (e) {
+    const value = {firstViewedAt: new Date()};
+    setTimeout(() => setCookie(JSON.stringify(value)), 0);
+    return value;
+  }
+}
+
+const useFlag = (tab: MenuTabRegular): {
+  flag: string | undefined,
+  onClickFlag?: () => void,
+} => {
+  const cookieName = `${NAV_MENU_FLAG_COOKIE_PREFIX}${tab.id}_${tab.flag}`;
+  const [cookies, setCookie] = useCookiesWithConsent([cookieName]);
+  const cookie = cookies[cookieName];
+  const flag = tab.flag;
+  if (flag === "new") {
+    const {clickedAt, firstViewedAt} = parseCookie(
+      cookie,
+      (value: string) => setCookie(cookieName, value),
+    );
+    const MS_PER_28_DAYS = 2_628_000_000;
+    if (clickedAt || firstViewedAt < new Date(Date.now() - MS_PER_28_DAYS)) {
+      return {flag: undefined};
+    }
+    return {
+      flag,
+      onClickFlag: () => {
+        setCookie(cookieName, JSON.stringify({
+          clickedAt: new Date(),
+          firstViewedAt,
+        }));
+      },
+    };
+  }
+  return {flag};
+}
+
+const TabNavigationItem = ({tab, onClick, className, iconOnlyNavigationEnabled}: TabNavigationItemProps) => {
+  const classes = useStyles(styles);
+  const {pathname} = useLocation();
+  const currentUser = useCurrentUser();
+  const {flag, onClickFlag} = useFlag(tab);
+  const iconOnlyMode = !!iconOnlyNavigationEnabled;
+  const navTitle = iconOnlyMode ? (tab.mobileTitle ?? tab.title) : tab.title;
+  const tooltipTitle = tab.tooltip || navTitle;
+
+  // Due to an issue with using anchor tags, we use react-router links, even for
+  // external links, we just use window.open to actuate the link.
+  const handleClick = useCallback((e: React.MouseEvent<HTMLAnchorElement>) => {
+    onClickFlag?.();
+    const externalLink = /https?:\/\//.test(tab.link);
+    if (externalLink) {
+      e.preventDefault();
+      window.open(tab.link, '_blank')?.focus();
+      onClick?.(e);
+    }
+    onClick?.(e);
+  }, [onClick, tab, onClickFlag]);
+
+  if (tab.betaOnly && !currentUser?.beta) {
+    return null;
+  }
+
+  const isSelected = pathname === tab.link;
+  
+  // when we're in renderIconOnlyNavigation (see Layout.tsx), display the compressed version
+  const IconComponent = (iconOnlyMode && tab.compressedIconComponent) 
+    || (isSelected && tab.selectedIconComponent) 
+    || tab.iconComponent;
+    
+  const iconElement = IconComponent ? <IconComponent /> : tab.icon;
+  
+  return <LWTooltip
+    placement='right-start'
+    title={tooltipTitle}
+    className={classes.tooltip}
+  >
+    <MenuItemLink
+      onClick={handleClick}
+      // We tried making this [the 'component' of the underlying material-UI
+      // MenuItem component] a function that return an a tag once. It made the
+      // entire sidebar fail on iOS. True story.
+      to={tab.link}
+      className={classNames(classes.menuItem, className, {
+        [classes.navButton]: !tab.subItem,
+        [classes.selected]: isSelected,
+        [classes.desktopOnly]: tab.desktopOnly,
+        [classes.subItemOverride]: tab.subItem && !iconOnlyMode,
+        [classes.iconOnlyMode]: iconOnlyMode,
+      })}
+      disableTouchRipple
+    >
+      {iconElement && <span className={classNames(classes.icon, {
+        [classes.iconOnlyIcon]: iconOnlyMode,
+        [classes.selectedIcon]: isSelected,
+        [classes.homeIcon]: tab.id === 'home',
+      })}>
+        {iconElement}
+      </span>}
+      {tab.subItem ? (
+        iconOnlyMode ? (
+          <span className={classNames(classes.navText, classes.iconOnlyNavText)}>
+            {navTitle}
+          </span>
+        ) : (
+          <TabNavigationSubItem>
+            {tab.title}
+          </TabNavigationSubItem>
+        )
+      ) : (
+        <span className={classNames(classes.navText, {
+          [classes.iconOnlyNavText]: iconOnlyMode,
+        })}>
+          {navTitle}
+        </span>
+      )}
+      {!iconOnlyMode && flag && <span className={classes.flag}>{flag}</span>}
+    </MenuItemLink>
+  </LWTooltip>
+}
+
+export default TabNavigationItem;
+
+

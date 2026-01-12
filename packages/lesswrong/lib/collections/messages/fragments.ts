@@ -1,0 +1,37 @@
+import { gql } from "@/lib/generated/gql-codegen";
+
+export const messageListFragment = gql(`
+  fragment messageListFragment on Message {
+    _id
+    user {
+      ...UsersMinimumInfo
+      profileImageId
+    }
+    contents {
+      html
+      plaintextMainText
+    }
+    createdAt
+    conversationId
+    voteCount
+    baseScore
+    score
+    extendedScore
+    currentUserVote
+    currentUserExtendedVote
+  }
+`)
+
+export const WithVoteMessage = gql(`
+  fragment WithVoteMessage on Message {
+    __typename
+    _id
+    score
+    baseScore
+    extendedScore
+    afBaseScore
+    voteCount
+    currentUserVote
+    currentUserExtendedVote
+  }
+`)

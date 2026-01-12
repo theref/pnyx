@@ -1,0 +1,31 @@
+import { gql } from "@/lib/generated/gql-codegen";
+
+export const reviewVoteFragment = gql(`
+  fragment reviewVoteFragment on ReviewVote {
+    _id
+    createdAt
+    userId
+    postId
+    qualitativeScore
+    quadraticScore
+    comment
+    year
+    dummy
+    reactions
+  }
+`)
+
+export const reviewAdminDashboard = gql(`
+  fragment reviewAdminDashboard on ReviewVote {
+    _id
+    createdAt
+    userId
+    user {
+      _id
+      displayName
+      karma
+    }
+  }
+`)
+
+

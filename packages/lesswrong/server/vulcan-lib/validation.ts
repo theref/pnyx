@@ -1,0 +1,149 @@
+import { userCanCreateField, userCanUpdateField } from '../../lib/vulcan-users/permissions';
+import { collectionNameToTypeName } from '@/lib/generated/collectionTypeNames';
+import { dataToModifier } from './mutators';
+
+interface SimpleSchemaValidationError {
+  type: string;
+  [key: string]: number | string;
+}
+
+/*
+
+  If document is not trusted, run validation steps:
+
+  1. Check that the current user has permission to edit each field
+  2. Run SimpleSchema validation step
+
+*/
+export const validateDocument = async <N extends CollectionNameString, D extends {} = CreateInputsByCollectionName[N]['data']>(
+  document: D,
+  collectionName: N,
+  context: ResolverContext,
+) => {
+  const { currentUser } = context;
+  const { getSchema } = await import('../../lib/schema/allSchemas');
+  const { getSimpleSchema } = await import('@/lib/schema/allSimpleSchemas');
+
+  const schema = getSchema(collectionName);
+
+  let validationErrors: Array<any> = [];
+
+  // Check validity of inserted document
+  Object.keys(document).forEach(fieldName => {
+    const fieldSchema = schema[fieldName];
+
+    // 1. check that the current user has permission to insert each field
+    if (!fieldSchema?.graphql || !userCanCreateField(currentUser, fieldSchema.graphql.canCreate)) {
+      validationErrors.push({
+        id: 'errors.disallowed_property_detected',
+        properties: { name: fieldName },
+      });
+    }
+  });
+
+  // 5. run SS validation
+  const validationContext = getSimpleSchema(collectionName).newContext();
+  validationContext.validate(document);
+
+  if (!validationContext.isValid()) {
+    const errors = validationContext.validationErrors();
+    errors.forEach((error: SimpleSchemaValidationError) => {
+      // eslint-disable-next-line no-console
+      // console.log(error);
+      if (error.type.includes('intlError')) {
+        const intlError = JSON.parse(error.type.replace('intlError|', ''));
+        validationErrors = validationErrors.concat(intlError);
+      } else {
+        const typeName = collectionNameToTypeName[collectionName];
+
+        validationErrors.push({
+          id: `errors.${error.type}`,
+          path: error.name,
+          properties: {
+            collectionName: collectionName,
+            typeName: typeName,
+            ...error,
+          },
+        });
+      }
+    });
+  }
+
+  return validationErrors;
+};
+
+/*
+
+  If document is not trusted, run validation steps:
+
+  1. Check that the current user has permission to insert each field
+  2. Run SimpleSchema validation step
+  
+*/
+const validateModifier = async <N extends CollectionNameString>(
+  modifier: MongoModifier,
+  document: any,
+  collectionName: N,
+  context: ResolverContext,
+) => {
+  const { currentUser } = context;
+
+  const { getSchema } = await import('../../lib/schema/allSchemas');
+  const { getSimpleSchema } = await import('@/lib/schema/allSimpleSchemas');
+
+  const schema = getSchema(collectionName);
+  const set = modifier.$set;
+  const unset = modifier.$unset;
+
+  let validationErrors: Array<any> = [];
+
+  // 1. check that the current user has permission to edit each field
+  const modifiedProperties = Object.keys(set).concat(Object.keys(unset));
+  modifiedProperties.forEach(function(fieldName) {
+    var field = schema[fieldName];
+    if (!field?.graphql || !userCanUpdateField(currentUser, field.graphql.canUpdate, document)) {
+      validationErrors.push({
+        id: 'errors.disallowed_property_detected',
+        properties: { name: fieldName },
+      });
+    }
+  });
+
+  // 2. run SS validation
+  const validationContext = getSimpleSchema(collectionName).newContext();
+  validationContext.validate({ $set: set, $unset: unset }, { modifier: true });
+
+  if (!validationContext.isValid()) {
+    const errors = validationContext.validationErrors();
+    errors.forEach((error: SimpleSchemaValidationError) => {
+      // eslint-disable-next-line no-console
+      // console.log(error);
+      if (error.type.includes('intlError')) {
+        validationErrors = validationErrors.concat(JSON.parse(error.type.replace('intlError|', '')));
+      } else {
+        const typeName = collectionNameToTypeName[collectionName];
+
+        validationErrors.push({
+          id: `errors.${error.type}`,
+          path: error.name,
+          properties: {
+            collectionName: collectionName,
+            typeName: typeName,
+            ...error,
+          },
+        });
+      }
+    });
+  }
+
+  return validationErrors;
+};
+
+export const validateData = <N extends CollectionNameString>(
+  data: CreateInputsByCollectionName[N]['data'],
+  document: ObjectsByCollectionName[N] | DbInsertion<ObjectsByCollectionName[N]>,
+  collectionName: N,
+  context: ResolverContext,
+) => {
+  return validateModifier(dataToModifier(data), document, collectionName, context);
+};

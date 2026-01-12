@@ -1,0 +1,268 @@
+import React from 'react';
+import { registerComponent } from '../../lib/vulcan-lib/components';
+import { postGetPageUrl } from '../../lib/collections/posts/helpers';
+import moment from '../../lib/moment-timezone';
+import { useTimezone } from '../common/withTimezone';
+import { truncate } from '../../lib/editor/ellipsize';
+import { twoLineEventsSidebarABTest } from '../../lib/abTests';
+import { useABTest } from '../hooks/useAbTests';
+import classNames from 'classnames';
+import LWTooltip from "../common/LWTooltip";
+import TabNavigationSubItem from "../common/TabNavigationMenu/TabNavigationSubItem";
+import { MenuItemLink } from "../common/Menus";
+import TimeTag from "../common/TimeTag";
+import FormatDate from "../common/FormatDate";
+import EventTime from "./EventTime";
+import { useQuery } from "@/lib/crud/useQuery";
+import { gql } from "@/lib/generated/gql-codegen";
+import withErrorBoundary from '../common/withErrorBoundary';
+import { defineStyles } from '../hooks/defineStyles';
+import { useStyles } from '../hooks/useStyles';
+
+const PostsListMultiQuery = gql(`
+  query multiPostTabNavigationEventsListQuery($selector: PostSelector, $limit: Int, $enableTotal: Boolean) {
+    posts(selector: $selector, limit: $limit, enableTotal: $enableTotal) {
+      results {
+        ...PostsList
+      }
+      totalCount
+    }
+  }
+`);
+
+const YESTERDAY_STRING = "[Yesterday]"
+const TODAY_STRING = "[Today]"
+const TOMORROW_STRING = "[Tomorrow]"
+const HIGHLIGHT_LENGTH = 600
+
+const styles = defineStyles("TabNavigationEventsList", (theme: ThemeType) => ({
+  eventWrapper: {
+    paddingTop: 0,
+    paddingBottom: 0,
+    paddingLeft: 0,
+    paddingRight: 0,
+    '&:hover': {
+      backgroundColor: 'transparent' // Prevent MUI default behavior of rendering solid background on hover
+    }
+  },
+  twoLine: {
+    height: "auto",
+  },
+  city: {
+    marginLeft: 6,
+  },
+  date: {
+    marginRight: 6,
+  },
+  displayTime: {
+    fontSize: ".85rem",
+    position: "relative",
+    top: -1,
+    color: theme.palette.text.slightlyIntense,
+    marginRight: theme.spacing.unit,
+  },
+  yesterday: {
+    color: "unset"
+  },
+  tooltipGroup: {
+    ...theme.typography.tinyText
+  },
+  tooltipTitle: {
+    fontWeight: 600,
+  },
+  tooltipLogisticsTitle: {
+    ...theme.typography.tinyText,
+    ...theme.typography.italic,
+    marginTop: theme.spacing.unit
+  },
+  highlight: {
+    marginTop: theme.spacing.unit,
+    marginBottom: theme.spacing.unit*2,
+    fontSize: "1.1rem",
+    [theme.breakpoints.down('sm')]: {
+      display: "none"
+    },
+    '& img': {
+      display:"none"
+    },
+    '& h1': {
+      fontSize: "1.2rem"
+    },
+    '& h2': {
+      fontSize: "1.2rem"
+    },
+    '& h3': {
+      fontSize: "1.1rem"
+    },
+    '& hr': {
+      display: "none"
+    },
+  },
+  tooltipDivider: {
+    borderTop: theme.palette.border.tooltipHR,
+    width: 25,
+    marginTop: theme.spacing.unit*2,
+    marginBottom: theme.spacing.unit*2
+  },
+  event: {
+    textOverflow: "ellipsis",
+  },
+  twoLineEvent: {
+    lineHeight: "1.3rem !important",
+  },
+  dot: {
+    color: theme.palette.grey[500]
+  }
+}));
+
+const TabNavigationEventsList = ({ terms, onClick }: {
+  terms: PostsViewTerms,
+  onClick: () => void,
+}) => {
+  const classes = useStyles(styles);
+  const { view, limit, ...selectorTerms } = terms;
+  const { data } = useQuery(PostsListMultiQuery, {
+    variables: {
+      selector: { [view]: selectorTerms },
+      limit: limit ?? 10,
+      enableTotal: false,
+    },
+    fetchPolicy: 'cache-and-network',
+    notifyOnNetworkStatusChange: true,
+  });
+
+  const results = data?.posts?.results;
+
+  const abTestGroup = useABTest(twoLineEventsSidebarABTest);
+  const EventComponent = (abTestGroup === "expanded") ? TabNavigationEventTwoLines : TabNavigationEventSingleLine;
+  if (!results) return null
+  
+  return <div>
+    {results.map((event) =>
+      <LWTooltip
+        key={event._id}
+        placement="right-start"
+        title={<EventSidebarTooltip event={event}/>}
+      >
+        <EventComponent
+          event={event}
+          onClick={onClick}
+        />
+      </LWTooltip>)}
+  </div>
+}
+
+const _TabNavigationEventSingleLine = ({event, onClick}: {
+  event: PostsList,
+  onClick: () => void,
+}) => {
+  const classes = useStyles(styles);
+  const { timezone } = useTimezone();
+  const startTime = event.startTime && moment(event.startTime).tz(timezone)
+
+  const displayTime = startTime ? startTime.calendar(undefined, {
+    sameDay: `[${TODAY_STRING}]`,
+    nextDay: `[${TOMORROW_STRING}]`,
+    nextWeek: ' ',
+    lastDay: `[${YESTERDAY_STRING}]`,
+    lastWeek: ' ',
+    sameElse: ' ',
+  }) : ' '
+
+  return <MenuItemLink
+    onClick={onClick}
+    to={postGetPageUrl(event)}
+    className={classes.eventWrapper}
+  >
+    <TabNavigationSubItem className={classes.event}>
+      {(event.startTime && displayTime && displayTime !== " ") && <TimeTag className={classNames(
+        classes.displayTime, {[classes.yesterday]: displayTime === YESTERDAY_STRING})
+      } dateTime={event.startTime}>
+        {displayTime}
+      </TimeTag>}
+      <span>{event.title}</span>
+    </TabNavigationSubItem>
+  </MenuItemLink>
+};
+const TabNavigationEventSingleLine = registerComponent("TabNavigationEventSingleLine", _TabNavigationEventSingleLine, {
+  hocs: [withErrorBoundary]
+});
+
+const _TabNavigationEventTwoLines = ({event, onClick}: {
+  event: PostsList,
+  onClick: () => void,
+}) => {
+  const classes = useStyles(styles);
+  const cityName = event.onlineEvent ? "Online" : getCityName(event)
+  
+  return <MenuItemLink
+    onClick={onClick}
+    to={postGetPageUrl(event)}
+    className={classNames(classes.eventWrapper, classes.twoLine)}
+  >
+    <TabNavigationSubItem className={classNames(classes.event, classes.twoLineEvent)}>
+      <span>{event.title}</span>
+      <div/>
+      <span>
+        {event.startTime && <FormatDate className={classes.date} date={event.startTime} format={"ddd MMM D"} />}
+        {cityName && <>
+          <span className={classes.dot}>{"•"}</span>
+          <span className={classes.city}>{cityName}</span>
+        </>}
+      </span>
+    </TabNavigationSubItem>
+  </MenuItemLink>
+};
+const TabNavigationEventTwoLines = registerComponent("TabNavigationEventTwoLines", _TabNavigationEventTwoLines, {
+  hocs: [withErrorBoundary]
+});
+
+export function getCityName(event: PostsBase|PostsList): string|null {
+  try {
+    if (event.googleLocation) {
+      const locationTypePreferenceOrdering = ["locality", "political", "country"];
+      for (let locationType of locationTypePreferenceOrdering) {
+        for (let addressComponent of event.googleLocation.address_components) {
+          if (addressComponent.types.indexOf(locationType) >= 0)
+            return addressComponent.long_name;
+        }
+      }
+      return null;
+    } else {
+      return "Online";
+    }
+  } catch {
+    return null;
+  }
+}
+
+const EventSidebarTooltip = ({event}: {
+  event: PostsList,
+}) => {
+  const classes = useStyles(styles);
+  const { htmlHighlight = "" } = event.contents || {}
+  const highlight = truncate(htmlHighlight, HIGHLIGHT_LENGTH)
+  return <div>
+    {event.group && <div className={classes.tooltipGroup}>{event.group.name}</div>}
+    <div className={classes.tooltipTitle}>{event.title}</div>
+    <div className={classes.tooltipLogisticsTitle}>
+      {event.onlineEvent ? "Online Event" : "Location"}
+    </div>
+    {!event.onlineEvent && <div>{event.location}</div>}
+    <div className={classes.tooltipLogisticsTitle}>Time</div>
+    <div>
+      {event.startTime
+        ? <EventTime post={event} />
+        : <span>Start time TBD</span>}
+    </div>
+    {highlight && <React.Fragment>
+        <div className={classes.tooltipDivider} />
+        <div className={classes.tooltipLogisticsTitle}>Description</div>
+        <div dangerouslySetInnerHTML={{__html: highlight}} className={classes.highlight} />
+      </React.Fragment>}
+  </div>
+}
+
+export default TabNavigationEventsList;
+
+

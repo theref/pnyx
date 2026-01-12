@@ -1,0 +1,12 @@
+{
+  "extends": "./tsconfig-server.json",
+  "compilerOptions": {
+    "module": "commonjs",
+    "target": "esnext",
+    "moduleResolution": "node"
+  },
+  "ts-node": {
+    "transpileOnly": true
+  }
+}
+

@@ -1,0 +1,46 @@
+import { gql } from "@/lib/generated/gql-codegen";
+
+export const ChaptersFragment = gql(`
+  fragment ChaptersFragment on Chapter {
+    _id
+    createdAt
+    title
+    subtitle
+    contents {
+      ...RevisionDisplay
+    }
+    number
+    sequenceId
+    postIds
+    posts {
+      ...PostsListWithVotes
+    }
+  }
+`)
+
+export const SlimChapter = gql(`
+  fragment SlimChapter on Chapter {
+    _id
+    createdAt
+    title
+    subtitle
+    contents {
+      ...RevisionDisplay
+    }
+    number
+    sequenceId
+    postIds
+    posts {
+      ...ChapterPostSlim
+    }
+  }
+`)
+
+export const ChaptersEdit = gql(`
+  fragment ChaptersEdit on Chapter {
+    ...ChaptersFragment
+    contents {
+      ...RevisionEdit
+    }
+  }
+`)

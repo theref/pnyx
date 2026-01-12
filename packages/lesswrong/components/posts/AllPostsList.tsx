@@ -1,0 +1,161 @@
+import React from "react";
+import { registerComponent } from "../../lib/vulcan-lib/components";
+import { useTimezone } from "../common/withTimezone";
+import { useLocation } from "../../lib/routeUtil";
+import { AllowHidingFrontPagePostsContext } from "../dropdowns/posts/PostActions";
+import { AnalyticsContext } from "../../lib/analyticsEvents";
+import {
+  DEFAULT_LOW_KARMA_THRESHOLD,
+  MAX_LOW_KARMA_THRESHOLD,
+} from "../../lib/collections/posts/views";
+import {
+  getBeforeDefault,
+  getAfterDefault,
+  timeframeToTimeBlock,
+  TimeframeType,
+} from "./timeframeUtils";
+import { forumAllPostsNumDaysSetting, forumAllPostsNumMonthsSetting, forumAllPostsNumWeeksSetting, forumAllPostsNumYearsSetting } from '@/lib/instanceSettings';
+import type { PostsTimeBlockShortformOption } from "./PostsTimeBlock";
+import { isFriendlyUI } from "../../themes/forumTheme";
+import PostsTimeframeList from "./PostsTimeframeList";
+import PostsTimeframeListExponential from "./PostsTimeframeListExponential";
+import PostsList2 from "./PostsList2";
+import { returnIfValidNumber } from "@/lib/utils/typeGuardUtils";
+
+const AllPostsList = ({
+  currentTimeframe,
+  currentSorting,
+  currentFilter,
+  currentShowLowKarma,
+  currentIncludeEvents,
+  currentHideCommunity,
+  showSettings,
+}: {
+  currentTimeframe: string,
+  currentFilter: string,
+  currentSorting: PostSortingMode,
+  currentShowLowKarma: boolean,
+  currentIncludeEvents: boolean,
+  currentHideCommunity: boolean,
+  showSettings: boolean,
+}) => {
+  const {timezone} = useTimezone();
+  const {query} = useLocation();
+
+  const baseTerms: PostsViewTerms = {
+    view: 'default',
+    karmaThreshold: returnIfValidNumber(query.karmaThreshold) ?? (currentShowLowKarma
+      ? MAX_LOW_KARMA_THRESHOLD
+      : DEFAULT_LOW_KARMA_THRESHOLD),
+    excludeEvents: !currentIncludeEvents && currentFilter !== "events",
+    hideCommunity: currentHideCommunity,
+    filter: currentFilter,
+    sortedBy: currentSorting,
+    after: query.after,
+    before: query.before,
+    requiredUnnominated: query.unnominated === 'true',
+    requiredFrontpage: query.frontpage === 'true',
+  };
+  if (currentTimeframe === "allTime") {
+    return (
+      <AnalyticsContext
+        listContext={"allPostsPage"}
+        terms={{ ...baseTerms, view: "allTime" as PostsViewName }}
+      >
+        <PostsList2
+          terms={{
+            ...baseTerms,
+            limit: 50
+          }}
+          dimWhenLoading={showSettings && !isFriendlyUI()}
+          showLoading={isFriendlyUI()}
+        />
+      </AnalyticsContext>
+    );
+  }
+
+  const timeframeToNumTimeBlocks = {
+    daily: forumAllPostsNumDaysSetting.get(),
+    weekly: forumAllPostsNumWeeksSetting.get(),
+    monthly: forumAllPostsNumMonthsSetting.get(),
+    yearly: forumAllPostsNumYearsSetting.get(),
+  };
+  
+  const numTimeBlocks = timeframeToNumTimeBlocks[currentTimeframe as TimeframeType];
+  const timeBlock = timeframeToTimeBlock[currentTimeframe as TimeframeType];
+
+  const postListParameters: PostsViewTerms = {
+    ...baseTerms,
+    view: "timeframe",
+  };
+
+  if (parseInt(query.limit)) {
+    postListParameters.limit = parseInt(query.limit);
+  }
+
+  if (currentTimeframe === 'exponential') {
+    return (
+      <AnalyticsContext
+        listContext={"allPostsPage"}
+        terms={postListParameters}
+      >
+        <PostsTimeframeListExponential
+          postListParameters={postListParameters}
+        />
+      </AnalyticsContext>
+    );
+  }
+
+  const after = query.after || getAfterDefault({
+    numTimeBlocks,
+    timeBlock,
+    timezone,
+    before: query.before,
+  });
+  const before = query.before  || getBeforeDefault({
+    timeBlock,
+    timezone,
+    after: query.after,
+  });
+
+  const hideTags = currentFilter !== "all";
+
+  let shortform: PostsTimeBlockShortformOption = "all";
+  if (currentFilter === "frontpage") {
+    shortform = "frontpage";
+  } else if (hideTags) {
+    shortform = "none";
+  }
+
+  return (
+    <div>
+      <AnalyticsContext
+        listContext={"allPostsPage"}
+        terms={postListParameters}
+        capturePostItemOnMount
+      >
+        {/* Allow unhiding posts from all posts menu to allow recovery of hiding
+          * the wrong post */}
+        <AllowHidingFrontPagePostsContext.Provider value={true}>
+          <PostsTimeframeList
+            // TODO: this doesn't seem to be guaranteed, actually?  Since it can
+            // come from an unsanitized query param...
+            timeframe={currentTimeframe as TimeframeType}
+            postListParameters={postListParameters}
+            numTimeBlocks={numTimeBlocks}
+            dimWhenLoading={showSettings && !isFriendlyUI()}
+            after={after}
+            before={before}
+            reverse={query.reverse === "true"}
+            shortform={query.includeShortform === "false" ? "none" : shortform}
+            includeTags={!hideTags}
+          />
+        </AllowHidingFrontPagePostsContext.Provider>
+      </AnalyticsContext>
+    </div>
+  );
+}
+
+export default registerComponent("AllPostsList", AllPostsList);
+
+

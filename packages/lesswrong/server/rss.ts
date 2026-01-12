@@ -1,0 +1,135 @@
+import RSS from 'rss';
+import { Comments } from '../server/collections/comments/collection';
+import { commentGetPageUrlFromDB } from '../lib/collections/comments/helpers';
+import { postGetPageUrl } from '../lib/collections/posts/helpers';
+import { userGetDisplayNameById } from '../lib/vulcan-users/helpers';
+import { forumTitleSetting, siteUrlSetting, taglineSetting } from '../lib/instanceSettings';
+import moment from '../lib/moment-timezone';
+import { rssTermsToUrl, RSSTerms } from '../lib/rss_urls';
+import { accessFilterMultiple } from '../lib/utils/schemaUtils';
+import { getCommentParentTitle } from '@/lib/notificationDataHelpers';
+import { asyncForeachSequential } from '../lib/utils/asyncUtils';
+import { getContextFromReqAndRes } from './vulcan-lib/apollo-server/context';
+import { viewTermsToQuery } from '../lib/utils/viewUtils';
+import { fetchFragment } from './fetchFragment';
+import { createAnonymousContext } from "./vulcan-lib/createContexts";
+import { PostsViews } from '@/lib/collections/posts/views';
+import { CommentsViews } from '@/lib/collections/comments/views';
+import { PostsRSSFeed } from '@/lib/collections/posts/fragments';
+import { camelCaseify } from '@/lib/vulcan-lib/utils';
+import type { NextRequest } from 'next/server';
+
+export const getMeta = (url: string) => {
+  const siteUrl = siteUrlSetting.get();
+
+  return {
+    title: forumTitleSetting.get(),
+    description: taglineSetting.get(),
+    feed_url: url,
+    site_url: siteUrl,
+    image_url: "https://res.cloudinary.com/lesswrong-2-0/image/upload/v1497915096/favicon_lncumn.ico"
+  };
+};
+
+type KarmaThreshold = 2 | 30 | 45 | 75 | 125 | 200;
+
+// LESSWRONG - this was added to handle karmaThresholds
+const roundKarmaThreshold = (threshold: number): KarmaThreshold =>
+    (threshold < 16 || !threshold) ? 2
+  : (threshold < 37) ? 30
+  : (threshold < 60) ? 45
+  : (threshold < 100) ? 75
+  : (threshold < 162) ? 125
+  : 200;
+
+export const servePostRSS = async (terms: RSSTerms,) => {
+  // LESSWRONG - this was added to handle karmaThresholds
+  let karmaThreshold = terms.karmaThreshold = roundKarmaThreshold(parseInt(terms.karmaThreshold, 10));
+  const url = rssTermsToUrl(terms);
+  const feed = new RSS(getMeta(url));
+
+  // We renamed the rss views to no longer have dashes in them
+  if (terms.view?.includes('-')) {
+    terms.view = camelCaseify(terms.view);
+  }
+
+  const context = createAnonymousContext();
+  const parameters = viewTermsToQuery(PostsViews, terms, undefined, context);
+  delete parameters['options']['sort']['sticky'];
+
+  parameters.options.limit = 10;
+
+  const postsCursor = await fetchFragment({
+    collectionName: "Posts",
+    fragmentDoc: PostsRSSFeed,
+    currentUser: null,
+    selector: parameters.selector,
+    options: parameters.options,
+  });
+
+  await asyncForeachSequential(postsCursor, async (post: PostsRSSFeed) => {
+    // LESSWRONG - this was added to handle karmaThresholds
+    let thresholdDate = (karmaThreshold === 2)  ? post.scoreExceeded2Date
+                      : (karmaThreshold === 30) ? post.scoreExceeded30Date
+                      : (karmaThreshold === 45) ? post.scoreExceeded45Date
+                      : (karmaThreshold === 75) ? post.scoreExceeded75Date
+                      : (karmaThreshold === 125) ? post.scoreExceeded125Date
+                      : (karmaThreshold === 200) ? post.scoreExceeded200Date
+                      : null;
+    thresholdDate = thresholdDate || post.postedAt;
+    let viewDate = (terms.view === "frontpageRss") ? post.frontpageDate
+                 : (terms.view === "curatedRss")   ? post.curatedDate
+                 : (terms.view === "metaRss")      ? post.metaDate
+                 : null;
+    viewDate = viewDate || post.postedAt;
+
+    let date = (viewDate > thresholdDate) ? viewDate : thresholdDate;
+
+    const postLink = `<a href="${postGetPageUrl(post, true)}#comments">Discuss</a>`;
+    const formattedTime = moment(post.postedAt).tz(moment.tz.guess()).format('LLL z');
+    const feedItem: any = {
+      title: post.title,
+      description: `Published on ${formattedTime}<br/><br/>${(post.contents && post.contents.html) || ""}<br/><br/>${postLink}`,
+      // LESSWRONG - changed how author is set for RSS because
+      // LessWrong posts don't reliably have post.author defined.
+      //author: post.author,
+      author: post.user?.displayName ?? "[anonymous]",
+      // LESSWRONG - this was added to handle karmaThresholds
+      // date: post.postedAt
+      date: date,
+      guid: post._id,
+      url: postGetPageUrl(post, true)
+    };
+
+    feed.item(feedItem);
+  });
+
+  return feed.xml();
+};
+
+export const serveCommentRSS = async (terms: RSSTerms, req: NextRequest) => {
+  const url = rssTermsToUrl(terms);
+  const feed = new RSS(getMeta(url));
+  const context = await getContextFromReqAndRes({req, isSSR: false});
+
+  let parameters = viewTermsToQuery(CommentsViews, terms, undefined, context);
+  parameters.options.limit = 50;
+  const commentsCursor = await Comments.find(parameters.selector, parameters.options).fetch();
+  const restrictedComments = await accessFilterMultiple(null, 'Comments', commentsCursor, context) as DbComment[];
+
+  await asyncForeachSequential(restrictedComments, async (comment) => {
+    const url = await commentGetPageUrlFromDB(comment, context, true);
+    const parentTitle = await getCommentParentTitle(comment, context)
+    feed.item({
+     title: 'Comment on ' + parentTitle,
+     description: `${comment.contents && comment.contents.html}</br></br><a href='${url}'>Discuss</a>`,
+     author: comment.author ?? undefined,
+     date: comment.postedAt,
+     url: url,
+     guid: comment._id
+    });
+  });
+
+  return feed.xml();
+};
+
